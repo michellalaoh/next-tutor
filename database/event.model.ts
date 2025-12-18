@@ -136,14 +136,29 @@ const EventSchema: Schema<IEvent> = new Schema(
   }
 );
 
-// Generate URL-friendly slug from title
-function generateSlug(title: string): string {
-  return title
+// Maximum length for generated slugs
+const SLUG_MAX_LENGTH = 120;
+
+// Generate URL-friendly slug from title, optionally with a suffix (e.g. counter)
+function generateSlug(title: string, suffix?: string | number): string {
+  // Base-normalization kept as-is
+  const base = title
     .toLowerCase()
     .trim()
     .replace(/[^\w\s-]/g, '') // Remove special characters
     .replace(/[\s_-]+/g, '-') // Replace spaces and underscores with hyphens
     .replace(/^-+|-+$/g, ''); // Remove leading/trailing hyphens
+
+  if (suffix === undefined || suffix === null || suffix === '') {
+    // Enforce overall length limit on the base slug
+    return base.slice(0, SLUG_MAX_LENGTH);
+  }
+
+  const suffixStr = String(suffix);
+  const maxBaseLength = Math.max(SLUG_MAX_LENGTH - suffixStr.length - 1, 1); // Reserve space for `-` and suffix
+  const truncatedBase = base.slice(0, maxBaseLength);
+
+  return `${truncatedBase}-${suffixStr}`.slice(0, SLUG_MAX_LENGTH);
 }
 
 // Normalize date to ISO format if it's a valid date string
@@ -164,11 +179,58 @@ function normalizeTime(timeString: string): string {
   return timeString.trim();
 }
 
-// Pre-save hook: generate slug and normalize date/time
-EventSchema.pre('save', function () {
-  // Only regenerate slug if title has changed
+// Pre-save hook: generate unique slug and normalize date/time
+EventSchema.pre('save', async function () {
+  // Only regenerate slug if title has changed or this is a new document
   if (this.isModified('title') || this.isNew) {
-    this.slug = generateSlug(this.title);
+    const baseSlug = generateSlug(this.title);
+
+    // Build a regex to find existing slugs that share this base, optionally with numeric suffixes
+    const escapedBase = baseSlug.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const slugPattern = new RegExp(`^${escapedBase}(?:-[0-9]+)?$`, 'i');
+
+    // Exclude current document when updating
+    const query: Record<string, unknown> = { slug: slugPattern };
+    if (!this.isNew && this._id) {
+      query._id = { $ne: this._id };
+    }
+
+    const existing = await this.model('Event')
+      .find(query, { slug: 1 })
+      .lean()
+      .exec();
+
+    const existingSlugs = new Set(
+      (existing as Array<{ slug?: string }>)
+        .map((doc) => doc.slug)
+        .filter((slug): slug is string => typeof slug === 'string')
+        .map((slug) => slug.toLowerCase())
+    );
+
+    let finalSlug = baseSlug;
+
+    if (existingSlugs.has(baseSlug.toLowerCase())) {
+      // Collision detected – iterate a numeric suffix until we find a free slug
+      let counter = 2;
+      // Safety upper bound; extremely unlikely to be hit
+      const MAX_ATTEMPTS = 10000;
+
+      while (counter < MAX_ATTEMPTS) {
+        const candidate = generateSlug(this.title, counter);
+        if (!existingSlugs.has(candidate.toLowerCase())) {
+          finalSlug = candidate;
+          break;
+        }
+        counter += 1;
+      }
+
+      // Fallback to timestamp-based suffix if we somehow exhausted the counter range
+      if (finalSlug === baseSlug) {
+        finalSlug = generateSlug(this.title, Date.now());
+      }
+    }
+
+    this.slug = finalSlug;
   }
 
   // Normalize date to ISO format if it's a valid date
