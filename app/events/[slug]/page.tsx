@@ -2,6 +2,7 @@ import BookEvent from "@/components/BookEvent";
 import EventCard from "@/components/EventCard";
 import { IEvent } from "@/database";
 import { getSilimarEventsBySlug } from "@/lib/actions/event.actions";
+import { cacheLife } from "next/cache";
 import Image from "next/image";
 import { notFound } from "next/navigation";
 
@@ -36,11 +37,16 @@ const EventTags = ({ tags }: { tags: string[]}) => (
 )
 
 const EventDetailsPage = async ({ params }: { params: Promise<{ slug: string }> }) => {
+  'use cache'
+  cacheLife('hours');
   const { slug } = await params;
   const request = await fetch(`${BASE_URL}/api/events/${slug}`);
-  const { event: { description, image, overview, date, time, location, mode, agenda, audience, tags, organizer } } = await request.json();
+  const response = await request.json();
+  const event: IEvent | undefined = response?.event;
 
-  if (!description) return notFound();
+  if (!event) return notFound();
+
+  const { description, image, overview, date, time, location, mode, agenda, audience, tags, organizer } = event;
 
   const bookings = 10;
 
@@ -51,7 +57,7 @@ const EventDetailsPage = async ({ params }: { params: Promise<{ slug: string }> 
   return (
     <section id='event'>
       <div className="header">
-        <h1>event DEscription</h1>
+        <h1>Event Description</h1>
         <p>{description}</p>
       </div>
 
@@ -65,7 +71,7 @@ const EventDetailsPage = async ({ params }: { params: Promise<{ slug: string }> 
             <p>{overview}</p>
           </section>
 
-          <section className="flex-col-gap">
+          <section className="flex-col-gap-2">
             <h2>Event Details</h2>
 
             <EventDetailItem icon="/icons/calendar.svg" alt="calendar" label={date} />
@@ -90,15 +96,15 @@ const EventDetailsPage = async ({ params }: { params: Promise<{ slug: string }> 
         <aside className="booking">
           <div className="signup-card">
             <h2>Book Your Spot</h2>
-            {bookings> 0 ? (
+            {bookings > 0 ? (
               <p className="text-sm">
                 Join {bookings} people who have already booked their spot!
               </p>
             ):(
-              <p className="ttext-sm">Be the first to book your spot!</p>
+              <p className="text-sm">Be the first to book your spot!</p>
             )}
 
-            <BookEvent />
+            <BookEvent eventId={event._id} slug={event.slug} />
           </div>
         </aside>
       </div>
